@@ -14,6 +14,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+INSTALL=0
+[[ "${1:-}" == "--install" ]] && INSTALL=1   # ./build.sh --install  -> also copy to /Applications and relaunch
+
 VERSION=$(tr -d '[:space:]' < VERSION)
 BUILD_NUM=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 OUT="${OUT:-build}"
@@ -61,16 +64,33 @@ xattr -cr "$APP"
 
 SIGN="${SIGN_ID:-}"
 if [[ -z "$SIGN" ]]; then
-  # Stable local identity so macOS remembers permissions (Accessibility) across rebuilds; falls back to ad-hoc.
+  # Prefer a stable, trusted identity so macOS keeps the Accessibility permission across rebuilds:
+  # Developer ID first, then the self-signed "NeXTDock Local Signing" identity, then ad-hoc.
   SIGN="-"
-  security find-identity -p codesigning | grep -q "NeXTDock Local Signing" && SIGN="NeXTDock Local Signing"
+  DEV_ID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)
+  if [[ -n "$DEV_ID" ]]; then
+    SIGN="$DEV_ID"
+  elif security find-identity -p codesigning | grep -q "NeXTDock Local Signing"; then
+    SIGN="NeXTDock Local Signing"
+  fi
 fi
 OPTS=()
 [[ "${HARDENED:-0}" == 1 ]] && OPTS=(--options runtime --timestamp)
 codesign --force "${OPTS[@]}" --sign "$SIGN" "$APP"
 
+# Verify in the temp folder; iCloud Drive may tag the copy in ./build afterwards, which is harmless.
+codesign --verify --strict "$APP"
 rm -rf "$OUT/NeXTDock.app"
 mkdir -p "$OUT"
 ditto "$APP" "$OUT/NeXTDock.app"
-codesign --verify --strict "$OUT/NeXTDock.app"
 echo "Built $PWD/$OUT/NeXTDock.app  (v$VERSION build $BUILD_NUM, $(lipo -archs "$OUT/NeXTDock.app/Contents/MacOS/NeXTDock"), signed: $SIGN)"
+
+if [[ $INSTALL == 1 ]]; then
+  # Never replace an app while it's running: macOS can no longer verify the running copy's signature,
+  # which breaks permission prompts. Quit first, swap the bundle, relaunch.
+  pkill -x NeXTDock 2>/dev/null && sleep 1 || true
+  rm -rf /Applications/NeXTDock.app
+  ditto "$APP" /Applications/NeXTDock.app   # from the clean temp copy, not the iCloud one
+  open /Applications/NeXTDock.app
+  echo "Installed and launched /Applications/NeXTDock.app"
+fi

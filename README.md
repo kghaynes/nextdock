@@ -52,15 +52,14 @@ Requires macOS 13 or later and Xcode or the Command Line Tools (`xcode-select --
 ```sh
 git clone https://github.com/kghaynes/nextdock.git
 cd nextdock
-./build.sh
-open build/NeXTDock.app
+./build.sh --install    # builds, copies to /Applications, and launches
 ```
 
 On first launch it copies whatever is pinned in Apple's Dock so you start from a familiar layout.
 
 ### Signing
 
-`build.sh` signs the app with a code-signing identity named **NeXTDock Local Signing** if one exists in your keychain, and falls back to an ad-hoc signature otherwise. A stable identity matters because macOS ties the Accessibility permission (needed by the desktop switcher) to the app's signature. With ad-hoc signing you have to re-grant the permission after every rebuild.
+`build.sh` signs the app with your **Developer ID Application** certificate if you have one, otherwise with a self-signed identity named **NeXTDock Local Signing** if it exists, and falls back to an ad-hoc signature. Always run the copy in `/Applications` (`./build.sh --install`): replacing an app while it's running breaks its signature, and macOS then won't list it in Privacy & Security. A stable identity matters because macOS ties the Accessibility permission (needed by the desktop switcher) to the app's signature. With ad-hoc signing you have to re-grant the permission after every rebuild.
 
 To create the local identity (one time):
 
