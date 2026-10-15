@@ -1,4 +1,5 @@
 # NeXTDock
+[![release](https://img.shields.io/github/v/release/kghaynes/nextdock)](https://github.com/kghaynes/nextdock/releases/latest)
 [![last commit](https://img.shields.io/github/last-commit/kghaynes/nextdock)](https://github.com/kghaynes/nextdock/commits/main)
 [![platform](https://img.shields.io/badge/platform-macOS%2013%2B-000000?logo=apple&logoColor=white)](#install)
 [![swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)](main.swift)
