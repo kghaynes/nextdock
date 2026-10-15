@@ -91,3 +91,7 @@ rm -rf ~/Library/Application\ Support/NeXTDock ~/Library/Logs/NeXTDock
 - Notification badges (unread counts) aren't shown yet.
 - The desktop switcher follows the main display's desktops only.
 - Moving a window to another desktop by dropping it on a desktop button isn't possible without disabling System Integrity Protection.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
