@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" width="128" alt="NeXTDock icon"></p>
+
 # NeXTDock
 [![release](https://img.shields.io/github/v/release/kghaynes/nextdock)](https://github.com/kghaynes/nextdock/releases/latest)
 [![last commit](https://img.shields.io/github/last-commit/kghaynes/nextdock)](https://github.com/kghaynes/nextdock/commits/main)
@@ -10,6 +12,8 @@
 A NeXTSTEP-style dock for modern macOS: a fixed column of beveled tiles on the edge of the screen that stays exactly the way you set it up.
 
 It doesn't replace Apple's Dock (that's a protected system app). It runs alongside it, and can push Apple's Dock out of sight while leaving Mission Control and Spaces working.
+
+<p align="center"><img src="docs/screenshot.png" width="560" alt="NeXTDock on the right edge of the screen, with callouts for the clock, desktop switcher, pinned apps, folders, scripts, Shortcuts, running apps, and options"></p>
 
 ## Why
 
@@ -84,6 +88,8 @@ cd - && rm -rf "$D"
 ### Making a release (maintainers)
 
 `release.sh` builds a universal app, signs it with your Developer ID, packages a drag-to-install DMG, sends it to Apple for notarization, and attaches Apple's approval ticket. `./release.sh --publish` also creates the GitHub Release. The version number lives in the `VERSION` file. See the comments at the top of `release.sh` for the one-time setup.
+
+To refresh the README images after a visual change, run `tools/screenshots.sh`. It renders the dock offscreen (`NeXTDock --snapshot`) with a demo layout of standard macOS apps, adds the callouts, and writes `docs/screenshot.png` and `docs/icon.png`.
 
 ## Permissions
 

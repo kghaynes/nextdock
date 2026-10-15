@@ -19,7 +19,7 @@ import ApplicationServices
 let fm = FileManager.default
 let home = fm.homeDirectoryForCurrentUser
 let supportDir = home.appendingPathComponent("Library/Application Support/NeXTDock")
-let configURL = supportDir.appendingPathComponent("config.json")
+var configURL = supportDir.appendingPathComponent("config.json")   // var: --snapshot --config can point elsewhere
 let logDir = home.appendingPathComponent("Library/Logs/NeXTDock")
 let shortcutsAppPath = "/System/Applications/Shortcuts.app"
 let finderPath = "/System/Library/CoreServices/Finder.app"
@@ -283,12 +283,13 @@ final class DockController: NSObject, NSMenuDelegate {
     var suspendRebuild = false
     let hover = HoverLabel()
     var desktops: (count: Int, current: Int?) = (0, nil)
+    var maxRunning = Int.max                  // snapshot mode limits the running section
     let panel: NSPanel
     let dockView: DockView
     private var signature = ""
     private var bundleIDCache: [String: String] = [:]
 
-    override init() {
+    init(visible: Bool = true) {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 64, height: 64),
                         styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)
@@ -328,7 +329,7 @@ final class DockController: NSObject, NSMenuDelegate {
         desktops = Desktops.read()
 
         rebuild(force: true)
-        panel.orderFrontRegardless()
+        if visible { panel.orderFrontRegardless() }
     }
 
     // MARK: Config
@@ -396,6 +397,7 @@ final class DockController: NSObject, NSMenuDelegate {
                 let a = $0.launchDate ?? .distantPast, b = $1.launchDate ?? .distantPast
                 return a == b ? $0.processIdentifier < $1.processIdentifier : a < b
             }
+            .prefix(maxRunning).map { $0 }
     }
 
     private func computeSignature() -> String {
@@ -1434,11 +1436,54 @@ final class PlusView: NSView {
     override func rightMouseDown(with e: NSEvent) { mouseDown(with: e) }
 }
 
+// MARK: - Snapshot (for README screenshots)
+// NeXTDock --snapshot out.png [--config demo.json]
+// Renders the dock offscreen to a PNG (no screen-recording permission needed) and writes
+// out.png.json describing where each tile sits, for the annotation script in tools/.
+
+enum Snapshot {
+    static func run(out: String, config: String?) -> Never {
+        if let config { configURL = URL(fileURLWithPath: config) }
+        let ctl = DockController(visible: false)
+        ctl.maxRunning = 3
+        ctl.rebuild(force: true)
+        let v = ctl.dockView
+        guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { exit(1) }
+        v.cacheDisplay(in: v.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { exit(1) }
+        do { try png.write(to: URL(fileURLWithPath: out)) } catch { exit(1) }
+
+        var tiles: [[String: Any]] = []
+        for sub in v.subviews {
+            if let t = sub as? Tile {
+                var running = false
+                if case .running = t.role { running = true }
+                tiles.append(["name": t.displayName, "kind": t.item.kind.rawValue, "running": running,
+                              "y": t.frame.minY, "h": t.frame.height])
+            } else if sub is PlusView {
+                tiles.append(["name": "+", "kind": "plus", "running": false, "y": sub.frame.minY, "h": sub.frame.height])
+            }
+        }
+        let meta: [String: Any] = ["width": v.bounds.width, "height": v.bounds.height,
+                                   "pixelsWide": rep.pixelsWide, "tiles": tiles]
+        if let data = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted]) {
+            try? data.write(to: URL(fileURLWithPath: out + ".json"))
+        }
+        print("Wrote \(out) (\(rep.pixelsWide)x\(rep.pixelsHigh))")
+        exit(0)
+    }
+}
+
 // MARK: - App entry
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: DockController?
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
+            let c = args.firstIndex(of: "--config").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+            Snapshot.run(out: args[i + 1], config: c)
+        }
         let me = Bundle.main.bundleIdentifier ?? "tech.cybercloudai.NeXTDock"
         if NSRunningApplication.runningApplications(withBundleIdentifier: me).count > 1 {
             NSApp.terminate(nil)
