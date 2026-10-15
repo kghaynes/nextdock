@@ -1,4 +1,10 @@
 # NeXTDock
+[![last commit](https://img.shields.io/github/last-commit/kghaynes/nextdock)](https://github.com/kghaynes/nextdock/commits/main)
+[![platform](https://img.shields.io/badge/platform-macOS%2013%2B-000000?logo=apple&logoColor=white)](#build)
+[![swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)](main.swift)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![sponsor on GitHub](https://img.shields.io/badge/sponsor-GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/kghaynes)
+[![support on Ko-fi](https://img.shields.io/badge/support-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](#supporting-nextdock)
 
 A NeXTSTEP-style dock for modern macOS: a fixed column of beveled tiles on the edge of the screen that stays exactly the way you set it up.
 
@@ -91,6 +97,19 @@ rm -rf ~/Library/Application\ Support/NeXTDock ~/Library/Logs/NeXTDock
 - Notification badges (unread counts) aren't shown yet.
 - The desktop switcher follows the main display's desktops only.
 - Moving a window to another desktop by dropping it on a desktop button isn't possible without disabling System Integrity Protection.
+
+## Supporting NeXTDock
+
+NeXTDock is free and open source. There are no ads, no paid tier, and nothing leaves your Mac.
+
+It is built and maintained by one person on his own time. If NeXTDock made your Mac a little less maddening, you can say thanks here:
+
+- **[GitHub Sponsors](https://github.com/sponsors/kghaynes)**: one-time or monthly. No fees, so all of it goes to the project.
+- **[Ko-fi](https://ko-fi.com/kenhaynes)**: one-time tip by card or PayPal. No GitHub account needed.
+
+Tips are completely optional and are not tax-deductible. Everything in NeXTDock works the same whether you tip or not.
+
+Not in a position to tip? Starring the repo, opening issues, and telling a fellow NeXT or Solaris veteran about it helps just as much.
 
 ## License
 
