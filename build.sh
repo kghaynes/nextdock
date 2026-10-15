@@ -33,15 +33,18 @@ else
   swiftc "${SWIFT_FLAGS[@]}" -target "$(uname -m)-apple-macos13.0" -o "$APP/Contents/MacOS/NeXTDock" main.swift
 fi
 
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>local.NeXTDock</string>
+  <key>CFBundleIdentifier</key><string>tech.cybercloudai.NeXTDock</string>
   <key>CFBundleName</key><string>NeXTDock</string>
   <key>CFBundleDisplayName</key><string>NeXTDock</string>
   <key>CFBundleExecutable</key><string>NeXTDock</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD_NUM</string>

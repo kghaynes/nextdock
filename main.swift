@@ -26,7 +26,7 @@ let finderPath = "/System/Library/CoreServices/Finder.app"
 let textEditURL = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
 
 extension NSPasteboard.PasteboardType {
-    static let dockIndex = NSPasteboard.PasteboardType("local.NeXTDock.index")
+    static let dockIndex = NSPasteboard.PasteboardType("tech.cybercloudai.NeXTDock.index")
 }
 
 @discardableResult
@@ -1439,7 +1439,7 @@ final class PlusView: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: DockController?
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let me = Bundle.main.bundleIdentifier ?? "local.NeXTDock"
+        let me = Bundle.main.bundleIdentifier ?? "tech.cybercloudai.NeXTDock"
         if NSRunningApplication.runningApplications(withBundleIdentifier: me).count > 1 {
             NSApp.terminate(nil)
             return
