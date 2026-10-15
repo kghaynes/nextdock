@@ -14,6 +14,7 @@ cd "$(dirname "$0")"
 PUBLISH=0
 [[ "${1:-}" == "--publish" ]] && PUBLISH=1
 PROFILE="${NOTARY_PROFILE:-nextdock-notary}"
+KC=(--keychain-profile "$PROFILE" --keychain "$HOME/Library/Keychains/login.keychain-db")
 VERSION=$(tr -d '[:space:]' < VERSION)
 
 ID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
@@ -38,14 +39,14 @@ DMG_NAME="NeXTDock-$VERSION.dmg"
 hdiutil create -quiet -volname "NeXTDock $VERSION" -srcfolder "$WORK/stage" -ov -format UDZO "$WORK/$DMG_NAME"
 codesign --force --timestamp --sign "$ID" "$WORK/$DMG_NAME"
 
-if xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
+if xcrun notarytool history "${KC[@]}" >/dev/null 2>&1; then
   echo "==> Notarizing (Apple's automated scan, usually 1-5 minutes)"
-  xcrun notarytool submit "$WORK/$DMG_NAME" --keychain-profile "$PROFILE" --wait --output-format json > "$WORK/notary.json" || true
+  xcrun notarytool submit "$WORK/$DMG_NAME" "${KC[@]}" --wait --output-format json > "$WORK/notary.json" || true
   STATUS=$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("status",""))' "$WORK/notary.json" 2>/dev/null || true)
   if [[ "$STATUS" != "Accepted" ]]; then
     SUB=$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("id",""))' "$WORK/notary.json" 2>/dev/null || true)
     echo "Notarization failed (status: ${STATUS:-unknown})."
-    [[ -n "$SUB" ]] && xcrun notarytool log "$SUB" --keychain-profile "$PROFILE"
+    [[ -n "$SUB" ]] && xcrun notarytool log "$SUB" "${KC[@]}"
     exit 1
   fi
   xcrun stapler staple -q "$WORK/$DMG_NAME"
