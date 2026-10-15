@@ -1,6 +1,6 @@
 # NeXTDock
 [![last commit](https://img.shields.io/github/last-commit/kghaynes/nextdock)](https://github.com/kghaynes/nextdock/commits/main)
-[![platform](https://img.shields.io/badge/platform-macOS%2013%2B-000000?logo=apple&logoColor=white)](#build)
+[![platform](https://img.shields.io/badge/platform-macOS%2013%2B-000000?logo=apple&logoColor=white)](#install)
 [![swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)](main.swift)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![sponsor on GitHub](https://img.shields.io/badge/sponsor-GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/kghaynes)
@@ -32,7 +32,15 @@ The modern macOS Dock mixes running apps in with pinned ones, shows background a
 
 Other options (click the **+** tile at the bottom): left or right edge, tile size, lock the dock, launch at login, NeXT-style double-click to launch, NeXT-style running indicator, and hide or restore Apple's Dock.
 
-## Build
+## Install
+
+Download the latest `NeXTDock-x.y.z.dmg` from [Releases](https://github.com/kghaynes/nextdock/releases), open it, and drag **NeXTDock** into **Applications**. Then open NeXTDock from Applications.
+
+The app is signed with an Apple Developer ID and notarized by Apple, and it runs on both Apple Silicon and Intel Macs (macOS 13 or later).
+
+To start it automatically, click the **+** tile at the bottom of the dock and choose **Launch at Login**.
+
+## Build from source
 
 Requires macOS 13 or later and Xcode or the Command Line Tools (`xcode-select --install`).
 
@@ -71,6 +79,10 @@ openssl pkcs12 -export -inkey key.pem -in cert.pem -out cs.p12 -passout pass:nex
 security import cs.p12 -k ~/Library/Keychains/login.keychain-db -P nextdock -T /usr/bin/codesign
 cd - && rm -rf "$D"
 ```
+
+### Making a release (maintainers)
+
+`release.sh` builds a universal app, signs it with your Developer ID, packages a drag-to-install DMG, sends it to Apple for notarization, and attaches Apple's approval ticket. `./release.sh --publish` also creates the GitHub Release. The version number lives in the `VERSION` file. See the comments at the top of `release.sh` for the one-time setup.
 
 ## Permissions
 
