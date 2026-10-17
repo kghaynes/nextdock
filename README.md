@@ -23,6 +23,15 @@ The modern macOS Dock mixes running apps in with pinned ones, shows background a
 - **Running apps get their own section** below a divider, in launch order.
 - **Pin anything**: apps, folders, files, shell/Python/AppleScript scripts, and Shortcuts.
 - **Hide any app** from the running section with "Never Show in Dock".
+- **Notification badges** for every app, like Apple's Dock: unread Mail, Messages, Slack, and so on.
+- **Out of the way when you want**: automatic hide and show, or a quick Hide NeXTDock toggle. It also steps aside for Mission Control.
+
+## What's new in 0.4.0
+
+- **Notification badges.** Apps show the same red badge they show in Apple's Dock (unread counts, "!" or short text), on pinned and running tiles. Numbers over 99 show as 99+. Turn them off with **+ → Show Notification Badges**.
+- **Automatically hide and show.** Off by default. Turn it on with **+ → Automatically Hide and Show**. The column slides off the screen edge and leaves a thin strip. Point at the strip to bring it back (choose the wait under **+ → Show After**: none, 0.2, 0.5 or 1 second). It hides again shortly after the pointer leaves, but never while a menu is open, while you're dragging, or while one of NeXTDock's windows is open. Dragging a file to the strip brings the column back so you can pin it.
+- **Hide NeXTDock / Show NeXTDock.** A quick toggle in every tile's right-click menu and in the **+** menu (Control-Command-H while one of those menus is open). Click the strip at the screen edge to bring it back. It stays hidden after a restart until you show it again.
+- **Mission Control.** The column now hides while Mission Control is open, so it no longer covers the button for adding a desktop, and comes back when Mission Control closes.
 
 ## Features
 
@@ -35,7 +44,9 @@ The modern macOS Dock mixes running apps in with pinned ones, shows background a
 | Clock | NeXT-style live clock and calendar page. Click to open Calendar. |
 | Desktops | Solaris CDE-style desktop switcher: one button per desktop, the current one pressed in. Click a number to jump straight to that desktop. |
 
-Other options (click the **+** tile at the bottom): left or right edge, tile size, lock the dock, launch at login, NeXT-style double-click to launch, NeXT-style running indicator, and hide or restore Apple's Dock.
+Other options (click the **+** tile at the bottom): left or right edge, tile size, lock the dock, notification badges, automatically hide and show, hide NeXTDock, launch at login, NeXT-style double-click to launch, NeXT-style running indicator, and hide or restore Apple's Dock.
+
+On the right edge the column can cover desktop icons. If that bothers you, turn on auto-hide or use the left edge.
 
 ## Install
 
@@ -92,6 +103,7 @@ To refresh the README images after a visual change, run `tools/screenshots.sh`. 
 
 ## Permissions
 
+- Notification badges and auto-hide need no permissions.
 - **Accessibility** (only for the desktop switcher): switching desktops works by pressing macOS's built-in "Switch to Desktop N" shortcut (Control-1 through Control-9). NeXTDock turns those shortcuts on for you the first time you use each one.
 
 ## Configuration
@@ -112,7 +124,7 @@ rm -rf ~/Library/Application\ Support/NeXTDock ~/Library/Logs/NeXTDock
 
 ## Limitations
 
-- Notification badges (unread counts) aren't shown yet.
+- Notification badges are read from macOS's own record of each app's Dock badge (an undocumented LaunchServices call). If a future macOS changes it, badges simply stop showing; nothing else is affected.
 - The desktop switcher follows the main display's desktops only.
 - Moving a window to another desktop by dropping it on a desktop button isn't possible without disabling System Integrity Protection.
 

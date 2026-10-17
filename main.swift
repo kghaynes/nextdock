@@ -6,6 +6,8 @@
 //  - Pin anything: apps, folders, files, scripts, Shortcuts.
 //  - Drop files on an app, script, or Shortcut tile to open/run them with it.
 //  - Per-app "Never Show in Dock" for background junk.
+//  - Notification badges (unread counts) like Apple's Dock.
+//  - Optional auto-hide, and a quick Hide NeXTDock toggle (Control-Command-H in its menus).
 //
 // Build:  ./build.sh        Config: ~/Library/Application Support/NeXTDock/config.json
 // Script logs: ~/Library/Logs/NeXTDock/
@@ -98,6 +100,11 @@ struct Config: Codable {
     var appleDockHidden = false
     var appleDockPrevAutohide = false
     var spaceNames: [String] = []         // optional names for Desktop 1, 2, ... (shown on hover)
+    var showBadges = true                 // red notification badges (unread counts), like Apple's Dock
+    var badgeInterval: Double = 3         // seconds between badge checks of running apps
+    var autoHide = false                  // slide the column off-screen until the pointer reaches the edge
+    var revealDelay: Double = 0.2         // auto-hide: seconds at the edge before it shows (0 = at once)
+    var tuckedAway = false                // "Hide NeXTDock": hidden until shown again (kept across relaunch)
 
     init() {}
 
@@ -116,6 +123,11 @@ struct Config: Codable {
         appleDockHidden = try c.decodeIfPresent(Bool.self, forKey: .appleDockHidden) ?? d.appleDockHidden
         appleDockPrevAutohide = try c.decodeIfPresent(Bool.self, forKey: .appleDockPrevAutohide) ?? d.appleDockPrevAutohide
         spaceNames = try c.decodeIfPresent([String].self, forKey: .spaceNames) ?? d.spaceNames
+        showBadges = try c.decodeIfPresent(Bool.self, forKey: .showBadges) ?? d.showBadges
+        badgeInterval = try c.decodeIfPresent(Double.self, forKey: .badgeInterval) ?? d.badgeInterval
+        autoHide = try c.decodeIfPresent(Bool.self, forKey: .autoHide) ?? d.autoHide
+        revealDelay = try c.decodeIfPresent(Double.self, forKey: .revealDelay) ?? d.revealDelay
+        tuckedAway = try c.decodeIfPresent(Bool.self, forKey: .tuckedAway) ?? d.tuckedAway
     }
 }
 
@@ -224,6 +236,77 @@ enum Desktops {
     }
 }
 
+// MARK: - Notification badges
+// An app's Dock badge (unread mail, messages, ...) is set with NSApp.dockTile.badgeLabel. LaunchServices
+// keeps it as the app's "StatusLabel": that's what Apple's Dock draws and what
+// `lsappinfo info -only StatusLabel` prints. NeXTDock reads it straight from LaunchServices with the
+// private _LSCopyApplicationInformation call (no permission needed, a few microseconds per app).
+// The functions are looked up at run time, so if a future macOS drops them there are simply no badges,
+// never a crash. Private API is acceptable here: NeXTDock isn't sandboxed or sold in the App Store.
+
+enum Badges {
+    private typealias ASNFromPid = @convention(c) (CFAllocator?, pid_t) -> UnsafeRawPointer?
+    private typealias CopyInfo = @convention(c) (Int32, UnsafeRawPointer, CFArray?) -> Unmanaged<CFDictionary>?
+    private static let ls = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY)
+    private static let asnFromPid: ASNFromPid? = {
+        guard let h = ls, let f = dlsym(h, "_LSASNCreateWithPid") else { return nil }
+        return unsafeBitCast(f, to: ASNFromPid.self)
+    }()
+    private static let copyInfo: CopyInfo? = {
+        guard let h = ls, let f = dlsym(h, "_LSCopyApplicationInformation") else { return nil }
+        return unsafeBitCast(f, to: CopyInfo.self)
+    }()
+    static let defaultSession: Int32 = -2           // kLSDefaultSessionID
+    static let statusLabelKey = "StatusLabel"
+
+    static var available: Bool { asnFromPid != nil && copyInfo != nil }
+
+    /// LaunchServices' information about a running app (only `keys`, or everything when nil).
+    static func info(pid: pid_t, session: Int32 = defaultSession, keys: [String]? = [statusLabelKey]) -> [String: Any]? {
+        guard let mk = asnFromPid, let copy = copyInfo, let asn = mk(nil, pid) else { return nil }
+        defer { Unmanaged<AnyObject>.fromOpaque(asn).release() }
+        return copy(session, asn, keys.map { $0 as CFArray })?.takeRetainedValue() as? [String: Any]
+    }
+
+    /// The badge text a running app shows in Apple's Dock, or nil when it has none.
+    static func label(pid: pid_t) -> String? { parse(info(pid: pid)?[statusLabelKey]) }
+
+    /// StatusLabel is a dictionary like { label = "3" }.
+    static func parse(_ v: Any?) -> String? {
+        let s = ((v as? [String: Any])?["label"] as? String) ?? (v as? String)
+        guard let t = s?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+        return t
+    }
+
+    /// What fits on a tile: numbers over 99 become "99+", text longer than 4 characters is cut with "…".
+    static func display(_ label: String) -> String {
+        let digits = label.filter { !",. \u{202F}\u{00A0}".contains($0) }
+        if !digits.isEmpty, digits.allSatisfy(\.isASCII), let n = Int(digits), n > 99 { return "99+" }
+        return label.count > 4 ? String(label.prefix(3)) + "…" : label
+    }
+
+    /// --badge-dump: writes what each running app's badge reads as to ~/Library/Logs/NeXTDock/badge-dump.log
+    /// (run from Finder or `open`, so it's in the login session).
+    static func dump() -> Never {
+        var out = "NeXTDock badge dump \(Date())\nprivate LaunchServices calls available: \(available)\n"
+        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        for a in apps {
+            let pid = a.processIdentifier
+            let main = label(pid: pid)
+            let other = parse(info(pid: pid, session: -1)?[statusLabelKey])
+            let all = info(pid: pid, keys: nil) ?? [:]
+            let related = all.keys.filter { $0.localizedCaseInsensitiveContains("status") || $0.localizedCaseInsensitiveContains("badge") }
+            out += "\(a.localizedName ?? "?") [\(a.bundleIdentifier ?? "-")] pid \(pid): "
+                + "badge=\(main.map { "\"\($0)\" -> \"\(display($0))\"" } ?? "none")"
+                + " session-1=\(other ?? "none") allKeys=\(all.count) related=\(related.sorted())\n"
+        }
+        try? fm.createDirectory(at: logDir, withIntermediateDirectories: true)
+        try? out.write(to: logDir.appendingPathComponent("badge-dump.log"), atomically: true, encoding: .utf8)
+        print(out)
+        exit(0)
+    }
+}
+
 // MARK: - Hover label
 // Standard tooltips only appear for the active app, and NeXTDock never activates,
 // so hover names are drawn in our own small floating panel beside the dock.
@@ -240,7 +323,7 @@ final class HoverLabel {
         panel.hasShadow = true
         panel.ignoresMouseEvents = true
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) + 1)
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]   // hidden by Mission Control
         let bg = NSView()
         bg.wantsLayer = true
         bg.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.94).cgColor
@@ -267,6 +350,7 @@ final class HoverLabel {
     }
 
     func hide() { panel.orderOut(nil) }
+    var isShowing: Bool { panel.isVisible }
 }
 
 func hoverTracking(_ v: NSView) {
@@ -288,6 +372,9 @@ final class DockController: NSObject, NSMenuDelegate {
     let dockView: DockView
     private var signature = ""
     private var bundleIDCache: [String: String] = [:]
+    var badges: [pid_t: String] = [:]         // notification badge text by process
+    private var badgeTimer: Timer?
+    lazy var autoHide = AutoHide(self)        // auto-hide and the Hide/Show NeXTDock quick toggle
 
     init(visible: Bool = true) {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 64, height: 64),
@@ -301,7 +388,9 @@ final class DockController: NSObject, NSMenuDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)))
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        // On every desktop, but hidden while Mission Control is open (.transient) so it never covers
+        // Mission Control's "add desktop" (+) button; it comes back when Mission Control closes.
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
         panel.hidesOnDeactivate = false
         panel.isMovable = false
 
@@ -329,7 +418,11 @@ final class DockController: NSObject, NSMenuDelegate {
         desktops = Desktops.read()
 
         rebuild(force: true)
-        if visible { panel.orderFrontRegardless() }
+        if visible {
+            panel.orderFrontRegardless()
+            autoHide.update(animated: false)   // starts hidden if auto-hide is on or it was hidden at quit
+            startBadgeTimer()
+        }
     }
 
     // MARK: Config
@@ -411,7 +504,45 @@ final class DockController: NSObject, NSMenuDelegate {
         return parts.joined(separator: ";")
     }
 
-    @objc private func workspaceChanged() { refreshIfNeeded() }
+    @objc private func workspaceChanged() {
+        refreshIfNeeded()
+        refreshBadges()
+    }
+
+    // MARK: Badges
+
+    /// Checks badges of running apps every few seconds (only while badges are on).
+    func startBadgeTimer() {
+        badgeTimer?.invalidate()
+        badgeTimer = nil
+        guard config.showBadges, Badges.available else {
+            if !badges.isEmpty { badges = [:]; redraw() }
+            return
+        }
+        let t = Timer(timeInterval: max(1, config.badgeInterval), repeats: true) { [weak self] _ in self?.refreshBadges() }
+        t.tolerance = 0.5
+        RunLoop.main.add(t, forMode: .common)
+        badgeTimer = t
+        refreshBadges()
+    }
+
+    /// Reads the badge of every running app that has a tile. Repaints only tiles whose badge changed.
+    func refreshBadges() {
+        guard config.showBadges, Badges.available else { return }
+        let tiles = dockView.subviews.compactMap { $0 as? Tile }.filter { $0.item.kind == .app }
+        var now: [pid_t: String] = [:]
+        var pids: [Tile: pid_t] = [:]
+        for t in tiles {
+            guard let app = t.runningApp else { continue }
+            let pid = app.processIdentifier
+            pids[t] = pid
+            if let l = Badges.label(pid: pid) { now[pid] = l }
+        }
+        guard now != badges else { return }
+        let old = badges
+        badges = now
+        for (t, pid) in pids where old[pid] != now[pid] { t.needsDisplay = true }
+    }
     @objc private func screensChanged() { rebuild(force: true) }
 
     func refreshIfNeeded() {
@@ -523,6 +654,7 @@ final class DockController: NSObject, NSMenuDelegate {
         panel.setFrame(frame, display: false)
         dockView.frame = NSRect(origin: .zero, size: frame.size)
         dockView.needsDisplay = true
+        autoHide.layoutStrip()
     }
 
     // MARK: Actions
@@ -773,6 +905,7 @@ final class DockController: NSObject, NSMenuDelegate {
             })
         }
         m.addItem(.separator())
+        m.addItem(autoHide.toggleMenuItem())
         m.addItem(submenuItem("NeXTDock", dockMenu()))
         return m
     }
@@ -843,6 +976,26 @@ final class DockController: NSObject, NSMenuDelegate {
         m.addItem(toggle("NeXT-Style Running Indicator", \.nextStyleIndicator))
         m.addItem(toggle("Double-Click to Launch", \.doubleClickToLaunch))
         m.addItem(toggle("Lock Dock", \.locked))
+        m.addItem(menuItem("Show Notification Badges", checked: config.showBadges) {
+            self.config.showBadges.toggle(); self.save(); self.startBadgeTimer(); self.redraw()
+        })
+
+        m.addItem(.separator())
+        m.addItem(menuItem("Automatically Hide and Show", checked: config.autoHide) {
+            self.config.autoHide.toggle(); self.save(); self.autoHide.settingsChanged()
+        })
+        let delay = newMenu()
+        for (title, v) in [("None", 0.0), ("0.2 Seconds", 0.2), ("0.5 Seconds", 0.5), ("1 Second", 1.0)] {
+            delay.addItem(menuItem(title, checked: config.revealDelay == v) { self.config.revealDelay = v; self.save() })
+        }
+        let delayItem = submenuItem("Show After", delay)
+        delayItem.isEnabled = config.autoHide
+        m.addItem(delayItem)
+        if config.edge == "right" {
+            m.addItem(disabledItem("On the right, the column can cover desktop icons. Try auto-hide or the left edge."))
+        }
+        m.addItem(autoHide.toggleMenuItem())
+        m.addItem(.separator())
 
         let hidden = newMenu()
         if config.neverShow.isEmpty { hidden.addItem(disabledItem("None")) }
@@ -1013,6 +1166,7 @@ final class DockView: NSView {
     override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { draggingUpdated(s) }
 
     override func draggingUpdated(_ s: NSDraggingInfo) -> NSDragOperation {
+        controller?.autoHide.noteDrag()
         switch action(for: s) {
         case .reorder(_, let to): highlighted = nil; showInsert(to); return .move
         case .openWith(let t, _): highlighted = t; showInsert(nil); return .copy
@@ -1169,6 +1323,10 @@ final class Tile: NSView, NSDraggingSource {
             }
         }
 
+        if item.kind == .app, controller.config.showBadges, let app, let label = controller.badges[app.processIdentifier] {
+            drawBadge(Badges.display(label), s)
+        }
+
         if let st = controller.status[item.path] {
             let color: NSColor = st == .busy ? .systemYellow : (st == .ok ? .systemGreen : .systemRed)
             border(color)
@@ -1292,6 +1450,41 @@ final class Tile: NSView, NSDraggingSource {
         }
     }
 
+    /// Red rounded badge in the top-right corner, like Apple's Dock. Scales with the tile;
+    /// Increase Contrast gets a darker red with a white outline.
+    private func drawBadge(_ text: String, _ s: CGFloat) {
+        let hc = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let font = NSFont.systemFont(ofSize: max(9, (s * 0.19).rounded()), weight: .semibold)
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white, .paragraphStyle: para]
+        let str = text as NSString
+        let ts = str.size(withAttributes: attrs)
+        let h = (font.pointSize * 1.5).rounded()
+        let w = min(s - 4, max(h, (ts.width + h * 0.6).rounded()))
+        let r = NSRect(x: s - w - 2, y: 2, width: w, height: h)
+        let path = NSBezierPath(roundedRect: r, xRadius: h / 2, yRadius: h / 2)
+        NSGraphicsContext.saveGraphicsState()
+        if !hc {
+            let sh = NSShadow()
+            sh.shadowColor = NSColor(white: 0, alpha: 0.55)
+            sh.shadowBlurRadius = 2
+            sh.shadowOffset = NSSize(width: 0, height: -1)
+            sh.set()
+        }
+        (hc ? NSColor(calibratedRed: 0.72, green: 0, blue: 0, alpha: 1) : NSColor.systemRed).setFill()
+        path.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        if hc {
+            NSColor.white.setStroke()
+            path.lineWidth = 1.5
+            path.stroke()
+        }
+        str.draw(in: NSRect(x: r.minX + 2, y: r.midY - ts.height / 2, width: r.width - 4, height: ts.height),
+                 withAttributes: attrs)
+    }
+
     private func border(_ color: NSColor) {
         color.setStroke()
         let p = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
@@ -1382,10 +1575,12 @@ final class Tile: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
         controller.suspendRebuild = true
+        controller.autoHide.noteDrag()
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         controller.suspendRebuild = false
+        controller.autoHide.noteDrag()
         let c = controller
         DispatchQueue.main.async { c.rebuild(force: true) }
     }
@@ -1436,6 +1631,319 @@ final class PlusView: NSView {
     override func rightMouseDown(with e: NSEvent) { mouseDown(with: e) }
 }
 
+// MARK: - Auto-hide and the Hide/Show NeXTDock quick toggle
+// No global event monitors and no extra permissions: while hidden, a thin strip at the screen edge has its
+// own tracking area; while shown by auto-hide, a short timer compares NSEvent.mouseLocation with the column.
+// Open menus run their own event loop, so the timer (default run-loop mode) waits until they close.
+
+final class RevealStripView: NSView {
+    weak var autoHide: AutoHide?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL, .dockIndex])
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func updateTrackingAreas() { super.updateTrackingAreas(); hoverTracking(self) }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); hoverTracking(self) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let hc = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        NSGradient(starting: NSColor(white: 0.42, alpha: hc ? 1 : 0.85), ending: NSColor(white: 0.24, alpha: hc ? 1 : 0.85))?
+            .draw(in: bounds, angle: 0)
+        NSColor(white: hc ? 1 : 0.7, alpha: 1).setFill()
+        NSRect(x: bounds.midX - 0.5, y: bounds.height * 0.3, width: 1, height: bounds.height * 0.4).fill()
+    }
+
+    override func mouseEntered(with e: NSEvent) { autoHide?.stripEntered() }
+    override func mouseExited(with e: NSEvent) { autoHide?.stripExited() }
+    override func mouseDown(with e: NSEvent) { autoHide?.stripClicked() }
+    override func rightMouseDown(with e: NSEvent) {
+        guard let c = autoHide?.ctl else { return }
+        NSMenu.popUpContextMenu(c.dockMenu(), with: e, for: self)
+    }
+    override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { autoHide?.dragEnteredStrip(); return [] }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { "Show NeXTDock" }
+    override func accessibilityPerformPress() -> Bool { autoHide?.stripClicked(); return true }
+}
+
+final class AutoHide {
+    unowned let ctl: DockController
+    let strip: NSPanel
+    let stripView = RevealStripView(frame: .zero)
+    static let stripWidth: CGFloat = 4
+    static let hideAfter: TimeInterval = 0.6
+    private(set) var hidden = false           // the column is hidden right now
+    var revealed = false                      // auto-hide: shown because the pointer came to the edge (or a click)
+    var pointerInStrip = false
+    var pointerInColumn = false               // --autohide-check only; normally read from the pointer position
+    var revealDue: TimeInterval?
+    var outsideSince: TimeInterval?
+    var lastDrag: TimeInterval = -100
+    var timer: Timer?
+    var dryRun = false                        // --autohide-check: state only, no windows or timers
+    var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
+    init(_ ctl: DockController) {
+        self.ctl = ctl
+        strip = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        strip.isOpaque = false
+        strip.backgroundColor = .clear
+        strip.hasShadow = false
+        strip.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)))
+        strip.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+        strip.hidesOnDeactivate = false
+        strip.setAccessibilityLabel("Show NeXTDock")
+        stripView.autoHide = self
+        strip.contentView = stripView
+    }
+
+    var shouldHide: Bool { ctl.config.tuckedAway || (ctl.config.autoHide && !revealed) }
+
+    /// "Hide NeXTDock" / "Show NeXTDock", with Control-Command-H as its key equivalent in NeXTDock's menus.
+    func toggleMenuItem() -> NSMenuItem {
+        let m = ClosureMenuItem(hidden ? "Show NeXTDock" : "Hide NeXTDock") { self.toggle() }
+        m.keyEquivalent = "h"
+        m.keyEquivalentModifierMask = [.control, .command]
+        m.toolTip = "Tucks the column away; click the thin strip at the screen edge to bring it back."
+        return m
+    }
+
+    // MARK: Events
+
+    func stripEntered() {
+        pointerInStrip = true
+        guard hidden, !ctl.config.tuckedAway else { return }
+        if ctl.config.revealDelay <= 0 { reveal() } else { revealDue = clock() + ctl.config.revealDelay; ensureTimer() }
+    }
+
+    func stripExited() { pointerInStrip = false; revealDue = nil }
+
+    /// Click on the strip: show the column (a tucked-away column comes back; auto-hide carries on as usual).
+    func stripClicked() {
+        ctl.config.tuckedAway = false
+        ctl.save()
+        reveal()
+    }
+
+    /// Dragging a file to the edge shows the column so it can be pinned.
+    func dragEnteredStrip() {
+        lastDrag = clock()
+        if hidden && !ctl.config.tuckedAway { reveal() }
+    }
+
+    func noteDrag() { lastDrag = clock() }
+
+    /// The quick toggle (menus, Control-Command-H).
+    func toggle() {
+        if hidden { stripClicked() } else {
+            ctl.config.tuckedAway = true
+            ctl.save()
+            revealed = false
+            update(animated: true)
+        }
+    }
+
+    func settingsChanged() {
+        revealed = false
+        outsideSince = nil
+        update(animated: true)
+    }
+
+    private func reveal() {
+        revealDue = nil
+        revealed = true
+        outsideSince = nil
+        update(animated: true)
+    }
+
+    /// Things that keep the column open: a hover label, a drag, or one of NeXTDock's own windows
+    /// (Add panel, an alert) being active. Menus hold it open by pausing the timer.
+    var holding: Bool {
+        if clock() - lastDrag < 1 { return true }
+        if dryRun { return false }
+        if ctl.hover.isShowing { return true }
+        return NSApp.isActive && NSApp.keyWindow != nil
+    }
+
+    var pointerOverColumn: Bool { dryRun ? pointerInColumn : ctl.panel.frame.contains(NSEvent.mouseLocation) }
+
+    func tick() {
+        let now = clock()
+        if let due = revealDue, now >= due {
+            if dryRun ? pointerInStrip : (pointerInStrip || strip.frame.contains(NSEvent.mouseLocation)) { reveal() }
+            revealDue = nil
+        }
+        if !hidden && ctl.config.autoHide && !ctl.config.tuckedAway && revealed {
+            if pointerOverColumn || holding { outsideSince = nil }
+            else if let t = outsideSince { if now - t >= AutoHide.hideAfter { revealed = false; update(animated: true) } }
+            else { outsideSince = now }
+        }
+        if !needsTimer { timer?.invalidate(); timer = nil }
+    }
+
+    private var needsTimer: Bool {
+        revealDue != nil || (!hidden && ctl.config.autoHide && !ctl.config.tuckedAway && revealed)
+    }
+
+    private func ensureTimer() {
+        guard !dryRun, timer == nil, needsTimer else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    // MARK: Presentation
+
+    func layoutStrip() {
+        let f = ctl.panel.frame, w = AutoHide.stripWidth
+        let x = ctl.config.edge == "left" ? f.minX : f.maxX - w
+        strip.setFrame(NSRect(x: x, y: f.minY, width: w, height: f.height), display: !dryRun)
+    }
+
+    func update(animated: Bool) {
+        layoutStrip()
+        let hide = shouldHide
+        if hide != hidden {
+            hidden = hide
+            if !dryRun { slide(out: hide, animated: animated) }
+        }
+        if !dryRun { if hidden { strip.orderFrontRegardless() } else { strip.orderOut(nil) } }
+        ensureTimer()
+    }
+
+    /// Slides the column's content out of (or into) its window, then orders the window out. The window
+    /// itself never moves, so nothing shows up on a neighbouring display. Reduce Motion: no animation.
+    private func slide(out: Bool, animated: Bool) {
+        let panel = ctl.panel, v = ctl.dockView
+        if out { ctl.hover.hide() }
+        guard animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            v.layer?.removeAnimation(forKey: "nextdock.slide")
+            if out { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+            return
+        }
+        v.wantsLayer = true
+        guard let layer = v.layer else {
+            if out { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+            return
+        }
+        let dx = (ctl.config.edge == "left" ? -1 : 1) * panel.frame.width
+        if !out { panel.orderFrontRegardless() }
+        let a = CABasicAnimation(keyPath: "transform.translation.x")
+        a.fromValue = out ? 0 : dx
+        a.toValue = out ? dx : 0
+        a.duration = 0.18
+        a.timingFunction = CAMediaTimingFunction(name: out ? .easeIn : .easeOut)
+        a.fillMode = .forwards
+        a.isRemovedOnCompletion = false
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            guard let self else { return }
+            if self.hidden && out { panel.orderOut(nil) }
+            layer.removeAnimation(forKey: "nextdock.slide")
+        }
+        layer.removeAnimation(forKey: "nextdock.slide")
+        layer.add(a, forKey: "nextdock.slide")
+        CATransaction.commit()
+    }
+}
+
+/// --autohide-check: drives the hide/show state machine by calling the strip and timer handlers directly
+/// with a fake clock, at both edges. No events are posted and no windows are shown. Uses a throwaway config
+/// in a temp folder, so the real config is never read or written. Results: ~/Library/Logs/NeXTDock/autohide-check.log
+enum AutoHideCheck {
+    static func run() -> Never {
+        let dir = fm.temporaryDirectory.appendingPathComponent("nextdock-autohide-check")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        configURL = dir.appendingPathComponent("config.json")
+        try? Data(#"{"pinned":[{"kind":"app","path":"/System/Library/CoreServices/Finder.app"}]}"#.utf8).write(to: configURL)
+        let ctl = DockController(visible: false)
+        let a = ctl.autoHide
+        a.dryRun = true
+        var t: TimeInterval = 1000
+        a.clock = { t }
+        var fails = 0
+        var out = ""
+        func check(_ name: String, _ ok: Bool) { if !ok { fails += 1 }; out += "AUTOHIDE \(name) \(ok ? "OK" : "FAIL")\n" }
+        check("defaults: auto-hide off, delay 0.2, not hidden, badges on",
+              ctl.config.autoHide == false && ctl.config.revealDelay == 0.2 && ctl.config.tuckedAway == false
+              && ctl.config.showBadges)
+        check("collection behavior: transient, all spaces, ignores cycle, not stationary",
+              ctl.panel.collectionBehavior.isSuperset(of: [.canJoinAllSpaces, .transient, .ignoresCycle])
+              && !ctl.panel.collectionBehavior.contains(.stationary))
+        for edge in ["left", "right"] {
+            ctl.config.edge = edge
+            ctl.config.autoHide = false
+            ctl.config.tuckedAway = false
+            ctl.config.revealDelay = 0.2
+            ctl.rebuild(force: true)
+            a.settingsChanged()
+            check("\(edge): auto-hide off -> shown", !a.hidden)
+            let f = ctl.panel.frame, sf = a.strip.frame
+            let atEdge = edge == "left" ? abs(sf.minX - f.minX) < 0.5 : abs(sf.maxX - f.maxX) < 0.5
+            check("\(edge): strip 4 pt wide at the screen edge, column's height", sf.width == 4 && atEdge && sf.height == f.height)
+            ctl.config.autoHide = true
+            a.settingsChanged()
+            check("\(edge): auto-hide on -> hidden", a.hidden)
+            a.stripEntered(); t += 0.1; a.tick()
+            check("\(edge): pointer at edge 0.1 s -> still hidden (delay 0.2)", a.hidden)
+            t += 0.15; a.tick()
+            check("\(edge): after the delay -> shown", !a.hidden)
+            a.stripExited(); a.pointerInColumn = true
+            t += 2; a.tick(); t += 2; a.tick()
+            check("\(edge): pointer on the column -> stays shown", !a.hidden)
+            a.pointerInColumn = false
+            a.tick(); t += 0.5; a.tick()
+            check("\(edge): left the column 0.5 s -> still shown", !a.hidden)
+            t += 0.2; a.tick()
+            check("\(edge): left 0.7 s -> hidden", a.hidden)
+            a.stripEntered(); a.stripExited(); t += 0.3; a.tick()
+            check("\(edge): brushed the edge and left before the delay -> stays hidden", a.hidden)
+            a.dragEnteredStrip()
+            check("\(edge): drag reaches the edge -> shown at once", !a.hidden)
+            t += 0.5; a.noteDrag(); a.tick(); t += 0.8; a.tick(); t += 0.1; a.tick()
+            check("\(edge): during a drag (and 1 s after) -> stays shown", !a.hidden)
+            t += 0.3; a.tick(); t += 0.7; a.tick()
+            check("\(edge): drag over, pointer away -> hidden", a.hidden)
+            ctl.config.revealDelay = 0
+            a.stripEntered()
+            check("\(edge): delay None -> shown immediately", !a.hidden)
+            a.stripExited()
+            a.toggle()
+            check("\(edge): Hide NeXTDock -> hidden and remembered", a.hidden && ctl.config.tuckedAway)
+            check("\(edge): menu item now reads Show NeXTDock with Control-Command-H",
+                  a.toggleMenuItem().title == "Show NeXTDock" && a.toggleMenuItem().keyEquivalent == "h"
+                  && a.toggleMenuItem().keyEquivalentModifierMask == [.control, .command])
+            a.stripEntered(); t += 2; a.tick(); a.stripExited()
+            check("\(edge): hidden by the toggle: pointing at the edge doesn't show it", a.hidden)
+            a.stripClicked()
+            check("\(edge): click on the strip -> shown, no longer remembered as hidden", !a.hidden && !ctl.config.tuckedAway)
+            ctl.config.autoHide = false
+            a.settingsChanged()
+            a.toggle()
+            check("\(edge): auto-hide off, Hide NeXTDock -> hidden", a.hidden && ctl.config.tuckedAway)
+            let saved = (try? JSONDecoder().decode(Config.self, from: Data(contentsOf: configURL)))?.tuckedAway == true
+            check("\(edge): hidden state saved (survives relaunch)", saved)
+            a.toggle()
+            check("\(edge): Show NeXTDock -> shown", !a.hidden && !ctl.config.tuckedAway)
+        }
+        check("badge text: 7 -> 7", Badges.display("7") == "7")
+        check("badge text: 150 -> 99+", Badges.display("150") == "99+")
+        check("badge text: 1,234 -> 99+", Badges.display("1,234") == "99+")
+        check("badge text: ! -> !", Badges.display("!") == "!")
+        check("badge text: Update -> Upd…", Badges.display("Update") == "Upd…")
+        check("badge parse: {label = 3} -> 3", Badges.parse(["label": "3"]) == "3")
+        check("badge parse: empty -> none", Badges.parse(["label": ""]) == nil)
+        out += "AUTOHIDE-RESULT \(fails == 0 ? "PASS" : "FAIL") failures=\(fails)\n"
+        try? fm.createDirectory(at: logDir, withIntermediateDirectories: true)
+        try? out.write(to: logDir.appendingPathComponent("autohide-check.log"), atomically: true, encoding: .utf8)
+        try? fm.removeItem(at: dir)
+        print(out)
+        exit(fails == 0 ? 0 : 1)
+    }
+}
+
 // MARK: - Snapshot (for README screenshots)
 // NeXTDock --snapshot out.png [--config demo.json]
 // Renders the dock offscreen to a PNG (no screen-recording permission needed) and writes
@@ -1484,6 +1992,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let c = args.firstIndex(of: "--config").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
             Snapshot.run(out: args[i + 1], config: c)
         }
+        if args.contains("--badge-dump") { Badges.dump() }
+        if args.contains("--autohide-check") { AutoHideCheck.run() }
         let me = Bundle.main.bundleIdentifier ?? "tech.cybercloudai.NeXTDock"
         if NSRunningApplication.runningApplications(withBundleIdentifier: me).count > 1 {
             NSApp.terminate(nil)
